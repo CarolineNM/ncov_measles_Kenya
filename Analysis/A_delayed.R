@@ -1,4 +1,5 @@
 rm(list=ls())
+options(dplyr.summarise.inform=F) 
 library(socialmixr)
 library(epimixr)
 library(dplyr)
@@ -10,57 +11,89 @@ library(remotes)
 library(readxl)
 library(rriskDistributions)
 
-serologyn<-read_excel("D:/MANUSCRIPT/ncov_measles_Kenya/data/monthly_modelinput.xlsx",sheet="raw_serology")
+serologyn<-read_excel("D:/MANUSCRIPT/ncov_measles_Kenya/data/monthly_modelinput.xlsx",sheet="newre-grouped")
 immunity_adults<-read_excel("D:/MANUSCRIPT/ncov_measles_Kenya/data/monthly_modelinput.xlsx",sheet="adults")
-contact<-read_excel("D:/MANUSCRIPT/ncov_measles_Kenya/data/monthly_modelinput.xlsx",sheet="contact2") #contact data
+contactn<-read_excel("D:/MANUSCRIPT/ncov_measles_Kenya/data/monthly_modelinput.xlsx",sheet="contact2") #contact data
 pop<-read_excel("D:/MANUSCRIPT/ncov_measles_Kenya/data/monthly_modelinput.xlsx",sheet="pop") #population data
 #seroprevalence<-read_excel("D:/MANUSCRIPT/ncov_measles_Kenya/data/monthly_modelinput.xlsx",sheet="year3")
-contact=as.matrix(contact)
+#contact=as.matrix(contact)
 
-lower_age_groups <- tibble(group=colnames(contact)) %>%
+lower_age_groups <- tibble(group=colnames(contactn)) %>%
   separate(group, c("low", "high"), sep="-", fill="right") %>%
   mutate(low=parse_number(low)) %>%
   .$low
 
-pop_20=pop %>% mutate(Year=c(rep(19,72),rep(20,72)))
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_20=vector(length(5000),mode="list")
-seroprevalence_shifted_20=vector(length(5000),mode="list")
-output_20= vector(length(5000),mode="list")
-cvm_20=vector(length(5000),mode="list")
-young_immunity=vector(length(5000),mode="list")
-combinedimmunity=vector(length(5000),mode="list")
-baseline_immunity=vector(length(5000),mode="list")
-combined=vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-adults=vector(length(5000),mode="list")
-datan=vector(length(5000),mode="list")
+df=data.frame(
+  Age_groups=c("0","12_60","72_180","192_228","240_588",">588"),
+  Population=c(9617,45170,68547,33289,72143,24214))
 
-for(i in 1:5000){
-  combined[[i]]=serologyn %>% sample_n(212,replace=T)
+
+get_mixing_mat <- function(df_mixing_by_id_prop,df){
+  # create proposed contact matrix
+  pop=df_mixing_by_id_prop %>% group_by(p_agegp) %>% summarise(count=length(local_id))
+  Contact_matrix_raw = df_mixing_by_id_prop %>% group_by(p_agegp) %>% 
+    summarise_at(paste0("agegp",1:length(unique(df_mixing_by_id_prop$p_agegp))), funs(sum(.,na.rm=T)))
+  Contact_matrix_raw = Contact_matrix_raw[,-1] %>% as.matrix() %>% t()
+  M = t(t(Contact_matrix_raw)/pop$count) # col=participants; row=contacts
+  names(dimnames(M))=list("contact","participant")
+  
+  M=t(M)*df$Population
+  M=(M+t(M))/2   # adjust for symetry
+  M=M/df$Population
+  Mixing_mat=(t(M)/df$Population)*7 # per capita per week
+  rownames(Mixing_mat)=df$Age_groups
+  colnames(Mixing_mat)=rownames(Mixing_mat)
+  return(Mixing_mat) 
+}
+mycontacts <- read.csv("D:/NewTCV/Lwak/contact_data.csv", header = T)
+mycontacts$age_class_cont<-car::recode(mycontacts$age_class_cont, '"Infant"=1;"Pre-School"=2;"Primary"=3; "Secondary"=4; "Adult"=5;"Older"=6')
+mycontacts<- mycontacts[,c("csid","age_class_part","age_class_cont")]
+contacts2=as.data.frame(mycontacts)
+
+contacts=vector(length(4000),mode="list")
+pop_20=pop %>% mutate(Year=c(rep(19,72),rep(20,72)))
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_20=vector(length(4000),mode="list")
+seroprevalence_shifted_20=vector(length(4000),mode="list")
+output_20= vector(length(4000),mode="list")
+cvm_20=vector(length(4000),mode="list")
+young_immunity=vector(length(4000),mode="list")
+combinedimmunity=vector(length(4000),mode="list")
+baseline_immunity=vector(length(4000),mode="list")
+combined=vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+adults=vector(length(4000),mode="list")
+datan=vector(length(4000),mode="list")
+
+
+for (i in 1:4000){
+  contacts[[i]]=contacts2 %>% sample_n(10042,replace=T)
+  contacts[[i]] <- contacts[[i]] %>% group_by(csid,age_class_cont) %>% mutate(num=n())
+  contacts[[i]] <- contacts[[i]] %>% distinct(.keep_all = T)
+  contacts[[i]] <- data.frame(contacts[[i]])
+  contacts[[i]] <- reshape(contacts[[i]],v.names="num", idvar = c("csid","age_class_part"), timevar="age_class_cont",direction = "wide")
+  contacts[[i]] <- contacts[[i]][,c("csid","age_class_part","num.1","num.2","num.3","num.4","num.5","num.6")]
+  names(contacts[[i]]) <- c("local_id","p_agegp",paste0("agegp",1:6))
+  contacts[[i]]$p_agegp <- paste0("agegp",contacts[[i]]$p_agegp)
+  contact = get_mixing_mat(contacts[[i]],df)
+  
+  ###otherdata
+  combined[[i]]=serologyn %>% sample_n(497,replace=T)
   combined[[i]]$Test=factor(combined[[i]]$Test)
   agegroups=data.frame(unique(serologyn$lower.age.limit))
   colnames(agegroups)="lower.age.limit"
   young_immunity[[i]]=data.frame(combined[[i]]) %>% select(lower.age.limit,Test) %>% group_by(lower.age.limit,Test,.drop = FALSE) %>% 
     summarise(total=n()) %>% mutate(seropositive=total/sum(total)) %>% filter(Test=="Positive",.preserve = TRUE) %>% ungroup()
-  if(!0%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 0,Test = "Positive", total=0,seropositive=0,.before = 1))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!9%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 9,Test = "Positive", total=0,seropositive=0.25,.before = 2))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!12%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 12,Test = "Positive", total=0,seropositive=0.96,.before = 3))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!24%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 24,Test = "Positive", total=0,seropositive=0.846,.before = 4))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!36%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 36,Test = "Positive", total=0,seropositive=0.957,.before = 5))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!48%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 48,Test = "Positive", total=0,seropositive=1,.before = 6))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!60%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 60,Test = "Positive", total=0,seropositive=0.923,.before = 7))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!72%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 72,Test = "Positive", total=0,seropositive=0.947,.before = 8))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!84%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 84,Test = "Positive", total=0,seropositive=0.952,.before = 9))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!96%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 96,Test = "Positive", total=0,seropositive=1,.before = 10))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!108%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 108,Test = "Positive", total=0,seropositive=0.5,.before = 11))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!120%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 120,Test = "Positive", total=0,seropositive=1,.before = 12))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!132%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 132,Test = "Positive", total=0,seropositive=1,.before = 13))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!144%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 144,Test = "Positive", total=0,seropositive=1,.before = 14))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!156%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 156,Test = "Positive", total=0,seropositive=1,.before = 15))}else {(young_immunity[[i]]=young_immunity[[i]])}
-  if(!168%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 168,Test = "Positive", total=0,seropositive=1,.before = 16))}else {(young_immunity[[i]]=young_immunity[[i]])}
+  if(!0%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 0,Test = "Positive", total=0,seropositive=0.05,.before = 1))}else {(young_immunity[[i]]=young_immunity[[i]])}
+  if(!9%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 9,Test = "Positive", total=0,seropositive=0.5,.before = 2))}else {(young_immunity[[i]]=young_immunity[[i]])}
+  if(!12%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 12,Test = "Positive", total=0,seropositive=0.94,.before = 3))}else {(young_immunity[[i]]=young_immunity[[i]])}
+  if(!24%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 24,Test = "Positive", total=0,seropositive=0.89,.before = 4))}else {(young_immunity[[i]]=young_immunity[[i]])}
+  if(!36%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 36,Test = "Positive", total=0,seropositive=0.92,.before = 5))}else {(young_immunity[[i]]=young_immunity[[i]])}
+  if(!48%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 48,Test = "Positive", total=0,seropositive=0.96,.before = 6))}else {(young_immunity[[i]]=young_immunity[[i]])}
+  if(!108%in%young_immunity[[i]]$lower.age.limit){(young_immunity[[i]]=young_immunity[[i]] %>% add_row(lower.age.limit = 108,Test = "Positive", total=0,seropositive=0.96,.before = 7))}else {(young_immunity[[i]]=young_immunity[[i]])}
   
   immunity_adults$seropositive=rbeta(1,71,3)
   combinedimmunity[[i]]=rbind(data.frame(young_immunity[[i]]),immunity_adults)
@@ -68,10 +101,11 @@ for(i in 1:5000){
   names(baseline_immunity[[i]])=combinedimmunity[[i]]$lower.age.limit
   maternal_immunity=data.frame(combinedimmunity[[i]]) %>% filter(lower.age.limit==0)%>%
     .$seropositive
-  perspective=data.frame(rep("19",72))
+  perspective=data.frame(rep("19",63))
   colnames(perspective)="perspective"
   combinedimmunity[[i]]=cbind(data.frame(combinedimmunity[[i]][,c(1,4)]),perspective)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   g[[i]]=rbeta(1,153,3)
@@ -133,25 +167,29 @@ for(i in 1:5000){
       )
   )
   
-  out_20 <- list(R=R,pre_COVID_herd=pre_COVID_herd,combinedimmunity=combinedimmunity,COVID_herd=COVID_herd,seroprevalence_shifted_20=seroprevalence_shifted_20,output_20=output_20)
+  out_20 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,combinedimmunity=combinedimmunity,COVID_herd=COVID_herd,seroprevalence_shifted_20=seroprevalence_shifted_20,output_20=output_20)
   save(out_20,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_20.Rdata")
   
 }
 
 
-data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_20.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_21= vector(length(5000),mode="list")
-cvm_21=vector(length(5000),mode="list")
-seroprevalence=data$seroprevalence_shifted_20
-seroprevalence_shifted_21=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_21=vector(length(5000),mode="list")
 
-for(i in 1:5000){ 
+data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_20.Rdata"))
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_21= vector(length(4000),mode="list")
+cvm_21=vector(length(4000),mode="list")
+seroprevalence=data$seroprevalence_shifted_20
+seroprevalence_shifted_21=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_21=vector(length(4000),mode="list")
+
+for (i in 1:4000){ 
+  contact = get_mixing_mat(contacts[[i]],df)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   g[[i]]=rbeta(1,153,3)
@@ -227,24 +265,26 @@ for(i in 1:5000){
   )
   
   
-  out_21 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_21=seroprevalence_shifted_21,output_21=output_21)
+  out_21 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_21=seroprevalence_shifted_21,output_21=output_21)
   save(out_21,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_21.Rdata")
   
 }
 ##year 22 is nov 2019
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_21.Rdata"))
-output_22= vector(length(5000),mode="list")
-cvm_22=vector(length(5000),mode="list")
+output_22= vector(length(4000),mode="list")
+cvm_22=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_21
-seroprevalence_shifted_22=vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_22=vector(length(5000),mode="list")
-for(i in 1:5000){
-  
+seroprevalence_shifted_22=vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_22=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   g[[i]]=rbeta(1,153,3)
@@ -318,7 +358,7 @@ for(i in 1:5000){
       )
   )
   
-  out_22 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_22=seroprevalence_shifted_22,output_22=output_22)
+  out_22 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_22=seroprevalence_shifted_22,output_22=output_22)
   save(out_22,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_22.Rdata")
   
 }
@@ -326,18 +366,21 @@ for(i in 1:5000){
 
 ##year 23 is Dec 2019
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_22.Rdata"))
-output_23= vector(length(5000),mode="list")
-cvm_23=vector(length(5000),mode="list")
+output_23= vector(length(4000),mode="list")
+cvm_23=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_22
-seroprevalence_shifted_23=vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_23=vector(length(5000),mode="list")
-for(i in 1:5000){
+seroprevalence_shifted_23=vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_23=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -410,7 +453,7 @@ for(i in 1:5000){
   )
   
   
-  out_23 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_23=seroprevalence_shifted_23,output_23=output_23)
+  out_23 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_23=seroprevalence_shifted_23,output_23=output_23)
   save(out_23,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_23.Rdata")
   
 }
@@ -418,18 +461,20 @@ for(i in 1:5000){
 
 ##year 24 is Jan 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_23.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_24= vector(length(5000),mode="list")
-cvm_24=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_24= vector(length(4000),mode="list")
+cvm_24=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_23
-seroprevalence_shifted_24=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_24=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_24=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_24=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   g[[i]]=rbeta(1,153,3)
@@ -504,25 +549,28 @@ for (i in 1:5000){
   )
   
   
-  out_24 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_24=seroprevalence_shifted_24,output_24=output_24)
+  out_24 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_24=seroprevalence_shifted_24,output_24=output_24)
   save(out_24,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_24.Rdata")
   
 }
 
 ##year 25 is Feb 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_24.Rdata"))
-output_25= vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-cvm_25=vector(length(5000),mode="list")
+output_25= vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+cvm_25=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_24
-seroprevalence_shifted_25=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_25=vector(length(5000),mode="list")
-for (i in 1:5000){
+seroprevalence_shifted_25=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_25=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -596,26 +644,28 @@ for (i in 1:5000){
   )
   
   
-  out_25 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_25=seroprevalence_shifted_25,output_25=output_25)
+  out_25 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_25=seroprevalence_shifted_25,output_25=output_25)
   save(out_25,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_25.Rdata")
   
 }
 
 ##year 26 is Mar 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_25.Rdata"))
-output_26= vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-cvm_26=vector(length(5000),mode="list")
+output_26= vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+cvm_26=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_25
-seroprevalence_shifted_26=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_26=vector(length(5000),mode="list")
-for (i in 1:5000){
+seroprevalence_shifted_26=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_26=vector(length(4000),mode="list")
+for (i in 1:4000){
   g[[i]]=rbeta(1,153,3)
-  
+  contact = get_mixing_mat(contacts[[i]],df)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -690,31 +740,33 @@ for (i in 1:5000){
   )
   
   
-  out_26 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_26=seroprevalence_shifted_26,output_26=output_26)
+  out_26 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_26=seroprevalence_shifted_26,output_26=output_26)
   save(out_26,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_26.Rdata")
   
 }
 
 ##year 27 is Apr 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_26.Rdata"))
-output_27= vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-cvm_27=vector(length(5000),mode="list")
+output_27= vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+cvm_27=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_26
-seroprevalence_shifted_27=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_27=vector(length(5000),mode="list")
+seroprevalence_shifted_27=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_27=vector(length(4000),mode="list")
 
-for (i in 1:5000){
+for (i in 1:4000){
   g[[i]]=rbeta(1,153,3)
-  
+  contact = get_mixing_mat(contacts[[i]],df)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
-  cvm_27[[i]] <- cbind(cvm_26[[i]],(cvm_26[[i]][, ncol(cvm_26[[i]])]))   ##ScenarioA same coverage
+  cvm_27[[i]] <- cbind(cvm_26[[i]], (cvm_26[[i]][, ncol(cvm_26[[i]])]))   ##ScenarioA same coverage
   colnames(cvm_27[[i]])[28] <- "27"
   
   pop_27=pop %>% mutate(Year=c(rep(27,72),rep(26,72)))   ##name pop according to analysis years
@@ -785,27 +837,29 @@ for (i in 1:5000){
   
   
   
-  out_27 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_27=seroprevalence_shifted_27,output_27=output_27)
+  out_27 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_27=seroprevalence_shifted_27,output_27=output_27)
   save(out_27,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_27.Rdata")
   
 }
 
 ##year 28 is May 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_27.Rdata"))
-output_28= vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-cvm_28=vector(length(5000),mode="list")
+output_28= vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+cvm_28=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_27
-seroprevalence_shifted_28=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_28=vector(length(5000),mode="list")
+seroprevalence_shifted_28=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_28=vector(length(4000),mode="list")
 
-for (i in 1:5000){
-  
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -877,26 +931,28 @@ for (i in 1:5000){
       )
   )
   
-  out_28 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_28=seroprevalence_shifted_28,output_28=output_28)
+  out_28 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_28=seroprevalence_shifted_28,output_28=output_28)
   save(out_28,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_28.Rdata")
   
 }
 
 ##year 29 is June 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_28.Rdata"))
-output_29= vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-cvm_29=vector(length(5000),mode="list")
+output_29= vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+cvm_29=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_28
-seroprevalence_shifted_29=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_29=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_29=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_29=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -971,25 +1027,27 @@ for (i in 1:5000){
   )
   
   
-  out_29 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_29=seroprevalence_shifted_29,output_29=output_29)
+  out_29 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_29=seroprevalence_shifted_29,output_29=output_29)
   save(out_29,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_29.Rdata")
 }
 
 ##year 30 is July 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_29.Rdata"))
-output_30= vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-cvm_30=vector(length(5000),mode="list")
+output_30= vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+cvm_30=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_29
-seroprevalence_shifted_30=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_30=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_30=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_30=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1061,27 +1119,29 @@ for (i in 1:5000){
       )
   )
   
-  out_30 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_30=seroprevalence_shifted_30,output_30=output_30)
+  out_30 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_30=seroprevalence_shifted_30,output_30=output_30)
   save(out_30,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_30.Rdata")
   
 }
 
 ##year 31 is Aug 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_30.Rdata"))
-cvm_31=vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_31= vector(length(5000),mode="list")
+cvm_31=vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_31= vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_30
-seroprevalence_shifted_31=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_31=vector(length(5000),mode="list")
-for (i in 1:5000){
+seroprevalence_shifted_31=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_31=vector(length(4000),mode="list")
+for (i in 1:4000){
   
   g[[i]]=rbeta(1,153,3)
-  
+  contact = get_mixing_mat(contacts[[i]],df)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1153,26 +1213,28 @@ for (i in 1:5000){
       )
   )
   
-  out_31 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_31=seroprevalence_shifted_31,output_31=output_31)
+  out_31 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_31=seroprevalence_shifted_31,output_31=output_31)
   save(out_31,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_31.Rdata")
   
 }
 
 ##year 32 is sep 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_31.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_32= vector(length(5000),mode="list")
-cvm_32=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_32= vector(length(4000),mode="list")
+cvm_32=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_31
-seroprevalence_shifted_32=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_32=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_32=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_32=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1245,27 +1307,28 @@ for (i in 1:5000){
       )
   )
   
-  out_32 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_32=seroprevalence_shifted_32,output_32=output_32)
+  out_32 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_32=seroprevalence_shifted_32,output_32=output_32)
   save(out_32,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_32.Rdata")
   
 }
 
 ##year 33 is oct 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_32.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-data$seroprevalence_shifted_32
-output_33= vector(length(5000),mode="list")
-cvm_33=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_33= vector(length(4000),mode="list")
+cvm_33=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_32
-seroprevalence_shifted_33=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_33=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_33=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_33=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1338,26 +1401,28 @@ for (i in 1:5000){
       )
   )
   
-  out_33 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_33=seroprevalence_shifted_33,output_33=output_33)
+  out_33 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_33=seroprevalence_shifted_33,output_33=output_33)
   save(out_33,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_33.Rdata")
   
 }
 
 ##year 34 is Nov 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_33.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_34= vector(length(5000),mode="list")
-cvm_34=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_34= vector(length(4000),mode="list")
+cvm_34=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_33
-seroprevalence_shifted_34=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_34=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_34=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_34=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1429,26 +1494,28 @@ for (i in 1:5000){
       )
   )
   
-  out_34 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_34=seroprevalence_shifted_34,output_34=output_34)
+  out_34 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_34=seroprevalence_shifted_34,output_34=output_34)
   save(out_34,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_34.Rdata")
   
 }
 
 ##year 35 is Dec 2020
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_34.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_35= vector(length(5000),mode="list")
-cvm_35=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_35= vector(length(4000),mode="list")
+cvm_35=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_34
-seroprevalence_shifted_35=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_35=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_35=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_35=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1522,26 +1589,28 @@ for (i in 1:5000){
       )
   )
   
-  out_35 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_35=seroprevalence_shifted_35,output_35=output_35)
+  out_35 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_35=seroprevalence_shifted_35,output_35=output_35)
   save(out_35,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_35.Rdata")
   
 }
 
 ##year 36 is Jan 2021
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_35.Rdata"))
-output_36= vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-cvm_36=vector(length(5000),mode="list")
+output_36= vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+cvm_36=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_35
-seroprevalence_shifted_36=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_36=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_36=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_36=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1614,26 +1683,28 @@ for (i in 1:5000){
       )
   )
   
-  out_36 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_36=seroprevalence_shifted_36,output_36=output_36)
+  out_36 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_36=seroprevalence_shifted_36,output_36=output_36)
   save(out_36,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_36.Rdata")
   
 }
 
 ##year 37 is feb 2021
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_36.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_37= vector(length(5000),mode="list")
-cvm_37=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_37= vector(length(4000),mode="list")
+cvm_37=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_36
-seroprevalence_shifted_37=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_37=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_37=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_37=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1706,26 +1777,28 @@ for (i in 1:5000){
       )
   )
   
-  out_37 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_37=seroprevalence_shifted_37,output_37=output_37)
+  out_37 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_37=seroprevalence_shifted_37,output_37=output_37)
   save(out_37,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_37.Rdata")
   
 }
 
 ##year 38 is mar 2021
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_37.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_38= vector(length(5000),mode="list")
-cvm_38=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_38= vector(length(4000),mode="list")
+cvm_38=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_37
-seroprevalence_shifted_38=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_38=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_38=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_38=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1798,7 +1871,7 @@ for (i in 1:5000){
       )
   )
   
-  out_38 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_38=seroprevalence_shifted_38,output_38=output_38)
+  out_38 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_38=seroprevalence_shifted_38,output_38=output_38)
   save(out_38,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_38.Rdata")
   
 }
@@ -1806,19 +1879,21 @@ for (i in 1:5000){
 ##year 39 is Apr 2021
 
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_38.Rdata"))
-output_39= vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-cvm_39=vector(length(5000),mode="list")
+output_39= vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+cvm_39=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_38
-seroprevalence_shifted_39=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_39=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_39=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_39=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1891,7 +1966,7 @@ for (i in 1:5000){
       )
   )
   
-  out_39 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_39=seroprevalence_shifted_39,output_39=output_39)
+  out_39 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_39=seroprevalence_shifted_39,output_39=output_39)
   save(out_39,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_39.Rdata")
   
 }
@@ -1899,19 +1974,21 @@ for (i in 1:5000){
 ##year 40 is May 2021
 
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_39.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_40= vector(length(5000),mode="list")
-cvm_40=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_40= vector(length(4000),mode="list")
+cvm_40=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_39
-seroprevalence_shifted_40=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_40=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_40=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_40=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -1984,7 +2061,7 @@ for (i in 1:5000){
       )
   )
   
-  out_40 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_40=seroprevalence_shifted_40,output_40=output_40)
+  out_40 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_40=seroprevalence_shifted_40,output_40=output_40)
   save(out_40,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_40.Rdata")
   
 }
@@ -1992,19 +2069,21 @@ for (i in 1:5000){
 ##year 41 is jun 2021
 
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_40.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_41= vector(length(5000),mode="list")
-cvm_41=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_41= vector(length(4000),mode="list")
+cvm_41=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_40
-seroprevalence_shifted_41=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_41=vector(length(5000),mode="list")
-for (i in 1:5000){
-  
+seroprevalence_shifted_41=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_41=vector(length(4000),mode="list")
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -2076,7 +2155,7 @@ for (i in 1:5000){
       )
   )
   
-  out_41 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_41=seroprevalence_shifted_41,output_41=output_41)
+  out_41 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_41=seroprevalence_shifted_41,output_41=output_41)
   save(out_41,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_41.Rdata")
   
 }
@@ -2084,20 +2163,22 @@ for (i in 1:5000){
 ##year 42 is Jul 2021
 
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_41.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_42= vector(length(5000),mode="list")
-cvm_42=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_42= vector(length(4000),mode="list")
+cvm_42=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_41
-seroprevalence_shifted_42=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_42=vector(length(5000),mode="list")
+seroprevalence_shifted_42=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_42=vector(length(4000),mode="list")
 
-for (i in 1:5000){
-  
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -2172,7 +2253,7 @@ for (i in 1:5000){
       )
   )
   
-  out_42 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_42=seroprevalence_shifted_42,output_42=output_42)
+  out_42 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_42=seroprevalence_shifted_42,output_42=output_42)
   save(out_42,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_42.Rdata")
   
 }
@@ -2180,22 +2261,24 @@ for (i in 1:5000){
 ##year 43 is Aug 2021
 
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_42.Rdata"))
-output_43= vector(length(5000),mode="list")
-cvm_43=vector(length(5000),mode="list")
+output_43= vector(length(4000),mode="list")
+cvm_43=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_42
-seroprevalence_shifted_43=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_43=vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-for (i in 1:5000){
+seroprevalence_shifted_43=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_43=vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+for (i in 1:4000){
   
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
-  
+  contact = get_mixing_mat(contacts[[i]],df)
   
   cvm_43[[i]] <- cbind(cvm_42[[i]], cvm_42[[i]][, ncol(cvm_42[[i]])])   ##ScenarioA same coverage
   colnames(cvm_43[[i]])[44] <- "43"
@@ -2266,7 +2349,7 @@ for (i in 1:5000){
       )
   )
   
-  out_43 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_43=seroprevalence_shifted_43,output_43=output_43)
+  out_43 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_43=seroprevalence_shifted_43,output_43=output_43)
   save(out_43,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_43.Rdata")
   
 }
@@ -2274,20 +2357,22 @@ for (i in 1:5000){
 ##year 44 is sep 2021
 
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_43.Rdata"))
-output_44= vector(length(5000),mode="list")
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-cvm_44=vector(length(5000),mode="list")
+output_44= vector(length(4000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+cvm_44=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_43
-seroprevalence_shifted_44=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_44=vector(length(5000),mode="list")
+seroprevalence_shifted_44=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_44=vector(length(4000),mode="list")
 
-for (i in 1:5000){
-  
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -2360,7 +2445,7 @@ for (i in 1:5000){
       )
   )
   
-  out_44 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_44=seroprevalence_shifted_44,output_44=output_44)
+  out_44 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_44=seroprevalence_shifted_44,output_44=output_44)
   save(out_44,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_44.Rdata")
   
 }
@@ -2368,20 +2453,22 @@ for (i in 1:5000){
 ##year 45 is oct 2021
 
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_44.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_45= vector(length(5000),mode="list")
-cvm_45=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_45= vector(length(4000),mode="list")
+cvm_45=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_44
-seroprevalence_shifted_45=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_45=vector(length(5000),mode="list")
+seroprevalence_shifted_45=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_45=vector(length(4000),mode="list")
 
-for (i in 1:5000){
-  
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -2453,7 +2540,7 @@ for (i in 1:5000){
       )
   )
   
-  out_45 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_45=seroprevalence_shifted_45,output_45=output_45)
+  out_45 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_45=seroprevalence_shifted_45,output_45=output_45)
   save(out_45,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_45.Rdata")
   
 }
@@ -2461,20 +2548,22 @@ for (i in 1:5000){
 ##year 46 is Nov 2021
 
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_45.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_46= vector(length(5000),mode="list")
-cvm_46=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_46= vector(length(4000),mode="list")
+cvm_46=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_45
-seroprevalence_shifted_46=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_46=vector(length(5000),mode="list")
+seroprevalence_shifted_46=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_46=vector(length(4000),mode="list")
 
-for (i in 1:5000){
-  
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -2546,7 +2635,7 @@ for (i in 1:5000){
       )
   )
   
-  out_46 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_46=seroprevalence_shifted_46,output_46=output_46)
+  out_46 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_46=seroprevalence_shifted_46,output_46=output_46)
   save(out_46,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_46.Rdata")
   
 }
@@ -2554,20 +2643,22 @@ for (i in 1:5000){
 ##year 47 is Dec 2021
 
 data=get(load("D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_46.Rdata"))
-R=vector(length(5000),mode="list")
-pre_COVID_herd=vector(length(5000),mode="list")
-COVID_herd=vector(length(5000),mode="list")
-output_47= vector(length(5000),mode="list")
-cvm_47=vector(length(5000),mode="list")
+R=vector(length(4000),mode="list")
+RT=vector(length(4000),mode="list")
+pre_COVID_herd=vector(length(4000),mode="list")
+COVID_herd=vector(length(4000),mode="list")
+output_47= vector(length(4000),mode="list")
+cvm_47=vector(length(4000),mode="list")
 seroprevalence=data$seroprevalence_shifted_46
-seroprevalence_shifted_47=vector(length(5000),mode="list")
-g=vector(length(5000),mode="list")
-seroprevalence_grouped_47=vector(length(5000),mode="list")
+seroprevalence_shifted_47=vector(length(4000),mode="list")
+g=vector(length(4000),mode="list")
+seroprevalence_grouped_47=vector(length(4000),mode="list")
 
-for (i in 1:5000){
-  
+for (i in 1:4000){
+  contact = get_mixing_mat(contacts[[i]],df)
   g[[i]]=rbeta(1,153,3)
   R[[i]]=rlnorm(1,2.66,0.08)
+  
   pre_COVID_herd[[i]]=1-1/R[[i]]
   COVID_herd[[i]]=1-1/(0.5*R[[i]])
   
@@ -2641,7 +2732,7 @@ for (i in 1:5000){
       )
   )
   
-  out_47 <- list(R=R,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_47=seroprevalence_shifted_47,output_47=output_47)
+  out_47 <- list(R=R,RT=RT,pre_COVID_herd=pre_COVID_herd,COVID_herd=COVID_herd,seroprevalence_shifted_47=seroprevalence_shifted_47,output_47=output_47)
   save(out_47,file = "D:/MANUSCRIPT/ncov_measles_Kenya/A/delayed/out_47.Rdata")
   
 }
